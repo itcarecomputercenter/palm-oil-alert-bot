@@ -40,17 +40,31 @@ def get_myr_price():
     url = "https://tradingeconomics.com/commodity/palm-oil"
     headers = {"User-Agent": "Mozilla/5.0"}
     res = requests.get(url, headers=headers)
+    html = res.text
+
+    # Try multiple known patterns in page JS
     try:
-        match = re.search(r'"Last":([\d.]+),', res.text)
+        # Method 1: search for "Last" JSON value
+        match = re.search(r'"Last"\s*:\s*([\d.]+)', html)
         if match:
             price_myr = float(match.group(1))
             php_per_kg = round((price_myr * myr_to_php) / 1000, 2)
             local_estimate = round(php_per_kg + freight + refining + tax + logistics + markup + buffer, 2)
             return price_myr, php_per_kg, local_estimate
-    except Exception as e:
-        return None, None, f"❌ Error getting MYR price: {e}"
-    return None, None, "MYR price not found."
 
+        # Optional fallback pattern
+        match_alt = re.search(r'"price":([\d.]+)', html)
+        if match_alt:
+            price_myr = float(match_alt.group(1))
+            php_per_kg = round((price_myr * myr_to_php) / 1000, 2)
+            local_estimate = round(php_per_kg + freight + refining + tax + logistics + markup + buffer, 2)
+            return price_myr, php_per_kg, local_estimate
+
+    except Exception as e:
+        return None, None, f"❌ Error fetching MYR price: {e}"
+
+    return None, None, "❌ MYR price not found."
+    
 def send_telegram_message(msg):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     payload = {'chat_id': CHAT_ID, 'text': msg}
