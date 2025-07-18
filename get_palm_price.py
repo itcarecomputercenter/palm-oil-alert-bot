@@ -52,10 +52,10 @@ def load_yesterday_data():
             if not content:
                 return None
             try:
-                return json.loads(content)
-            except json.JSONDecodeError:
-                print("⚠️ Invalid JSON format in yesterday_data.json.")
-                return None
+                yesterday_data = load_yesterday_data()
+            except Exception as e:
+                print("⚠️ Failed to load yesterday's data:", str(e))
+                yesterday_data = None
             return json.load(f)
     return None
 
