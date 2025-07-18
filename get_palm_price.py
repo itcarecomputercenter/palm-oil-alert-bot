@@ -51,6 +51,11 @@ def load_yesterday_data():
             content = f.read().strip()
             if not content:
                 return None
+            try:
+                return json.loads(content)
+            except json.JSONDecodeError:
+                print("⚠️ Invalid JSON format in yesterday_data.json.")
+                return None
             return json.load(f)
     return None
 
