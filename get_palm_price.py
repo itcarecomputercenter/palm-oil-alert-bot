@@ -1,124 +1,98 @@
+# palm_oil_bot/get_palm_price.py
+
 import requests
-import datetime
-import os
-import json
 from bs4 import BeautifulSoup
+from datetime import datetime
+import json
+import os
+import telegram
 
 # === CONFIG ===
-BOT_TOKEN = os.environ['BOT_TOKEN']
-CHAT_ID = os.environ['CHAT_ID']
-HISTORY_FILE = "palm_price_history.json"
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+USD_TO_PHP_API = "https://api.exchangerate.host/latest?base=USD&symbols=PHP"
+YESTERDAY_FILE = "yesterday_data.json"
 
-# Cost assumptions (in PHP)
-freight = 2.5
-refining = 2.5
-tax = 1.5
-logistics = 2.0
-markup = 5.0
-buffer = 1.0
-
-def get_usd_php_rate():
-    url = "https://api.exchangerate.host/latest?base=USD&symbols=PHP"
+def fetch_usd_palm_price():
     try:
-        res = requests.get(url)
-        rate = res.json()['rates']['PHP']
-        return round(rate, 2)
-    except Exception:
-        return 58.0  # fallback
-
-def get_usd_price():
-    url = "https://markets.businessinsider.com/commodities/palm-oil-price"
-    headers = {"User-Agent": "Mozilla/5.0"}
-    try:
-        res = requests.get(url, headers=headers)
-        soup = BeautifulSoup(res.text, 'html.parser')
-        price_span = soup.find('span', class_='price-section__current-value')
-        if price_span:
-            return float(price_span.text.replace(',', '').strip())
+        r = requests.get("https://markets.businessinsider.com/commodities/palm-oil-price")
+        soup = BeautifulSoup(r.text, "html.parser")
+        el = soup.select_one(".price-section__current-value")
+        return float(el.text.replace(",", "")) if el else None
     except:
         return None
 
-def calculate_php_price(usd_price, exchange_rate):
-    base_php_per_kg = round((usd_price * exchange_rate) / 1000, 2)
-    retail_php_per_kg = round(base_php_per_kg + freight + refining + tax + logistics + markup + buffer, 2)
-    return base_php_per_kg, retail_php_per_kg
+def fetch_myr_palm_price():
+    try:
+        r = requests.get("https://tradingeconomics.com/commodity/palm-oil")
+        soup = BeautifulSoup(r.text, "html.parser")
+        el = soup.select_one(".table-hover .datatable-row:nth-of-type(1) td:nth-of-type(2)")
+        return float(el.text.replace(",", "")) if el else None
+    except:
+        return None
+
+def fetch_usd_to_php():
+    try:
+        r = requests.get(USD_TO_PHP_API)
+        return r.json()["rates"]["PHP"]
+    except:
+        return None
 
 def load_yesterday_data():
-    if os.path.exists(HISTORY_FILE):
+    if not os.path.exists(YESTERDAY_FILE):
         return None
-        
-        with open(HISTORY_FILE, "r") as f:
-            content = f.read().strip()
-            if not content:
-                return None
-            try:
-                yesterday_data = load_yesterday_data()
-            except Exception as e:
-                print("⚠️ Failed to load yesterday's data:", str(e))
-                yesterday_data = None
-            return json.load(f)
-    return None
+    with open(YESTERDAY_FILE, "r") as f:
+        content = f.read().strip()
+        if not content:
+            return None
+        try:
+            return json.loads(content)
+        except json.JSONDecodeError:
+            return None
 
-def save_today_data(today_data):
-    with open(HISTORY_FILE, "w") as f:
-        json.dump(today_data, f)
+def save_today_data(data):
+    with open(YESTERDAY_FILE, "w") as f:
+        json.dump(data, f)
 
-def send_telegram_message(msg):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    requests.post(url, data={'chat_id': CHAT_ID, 'text': msg})
+def format_change(current, previous):
+    if previous is None or current is None:
+        return "N/A"
+    diff = current - previous
+    pct = (diff / previous) * 100 if previous else 0
+    symbol = "⬆" if diff > 0 else ("⬇" if diff < 0 else "➡")
+    return f"{symbol} {diff:.2f} ({pct:+.2f}%)"
 
-def compare_and_report(today, yesterday):
-    change_usd = today["usd_price"] - yesterday["usd_price"]
-    change_fx = today["usd_php"] - yesterday["usd_php"]
-    change_php_kg = today["base_php"] - yesterday["base_php"]
+def main():
+    now = datetime.now().strftime("%Y-%m-%d %H:%M")
 
-    pct_usd = round((change_usd / yesterday["usd_price"]) * 100, 2)
-    pct_fx = round((change_fx / yesterday["usd_php"]) * 100, 2)
-    pct_php = round((change_php_kg / yesterday["base_php"]) * 100, 2)
-
-    reason = "🛢️ Palm oil price" if abs(pct_usd) > abs(pct_fx) else "💱 USD/PHP rate"
-
-    return (
-        f"🛢️ Palm Oil Price Update ({today['timestamp']}):\n\n"
-        f"🌐 Palm Oil: {today['usd_price']} USD/ton ({'+' if change_usd >= 0 else ''}{pct_usd}%)\n"
-        f"💱 USD to PHP: {today['usd_php']} ({'+' if change_fx >= 0 else ''}{pct_fx}%)\n"
-        f"→ Base: ₱{today['base_php']}/kg ({'+' if change_php_kg >= 0 else ''}{pct_php}%)\n"
-        f"→ Est. Retail: ₱{today['retail_php']}/kg\n\n"
-        f"📌 Main driver: {reason}"
-    )
-
-if __name__ == '__main__':
-    now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M')
-    usd_price = get_usd_price()
-    usd_php = get_usd_php_rate()
-
-    if usd_price is None:
-        send_telegram_message(f"❌ Unable to fetch palm oil price for {now}.")
-        exit()
-
-    base_php, retail_php = calculate_php_price(usd_price, usd_php)
-
-    today_data = {
-        "timestamp": now,
-        "usd_price": usd_price,
-        "usd_php": usd_php,
-        "base_php": base_php,
-        "retail_php": retail_php
-    }
+    usd_price = fetch_usd_palm_price()
+    myr_price = fetch_myr_palm_price()
+    usd_to_php = fetch_usd_to_php()
 
     yesterday_data = load_yesterday_data()
 
-    if yesterday_data:
-        msg = compare_and_report(today_data, yesterday_data)
-    else:
-        msg = (
-            f"🛢️ Palm Oil Price Update ({now}):\n\n"
-            f"🌐 Palm Oil: {usd_price} USD/ton\n"
-            f"💱 USD to PHP: {usd_php}\n"
-            f"→ Base: ₱{base_php}/kg\n"
-            f"→ Est. Retail: ₱{retail_php}/kg\n\n"
-            f"📌 No comparison (first run)"
-        )
+    usd_change = format_change(usd_price, yesterday_data.get("usd_price") if yesterday_data else None)
+    fx_change = format_change(usd_to_php, yesterday_data.get("usd_to_php") if yesterday_data else None)
 
-    save_today_data(today_data)
-    send_telegram_message(msg)
+    price_in_php = usd_price * usd_to_php if usd_price and usd_to_php else None
+
+    msg = f"\ud83d\udcc8 Palm Oil Price Update ({now}):\n\n"
+    msg += f"USD Price: {usd_price:.2f} USD/MT {f'({usd_change})' if usd_change else ''}\n" if usd_price else "USD price not found.\n"
+    msg += f"MYR Price: {myr_price:.2f} MYR/MT\n" if myr_price else "\u274c MYR price not found.\n"
+    msg += f"USD to PHP: {usd_to_php:.2f} {f'({fx_change})' if fx_change else ''}\n" if usd_to_php else "\u274c USD to PHP not found.\n"
+    msg += f"\n\ud83d\udcb5 Estimated Price in PHP: {price_in_php:.2f} PHP/MT\n" if price_in_php else ""
+    msg += f"\ud83d\udcca PHP/KG: {price_in_php / 1000:.2f} PHP/kg\n" if price_in_php else ""
+
+    if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
+        bot = telegram.Bot(token=TELEGRAM_BOT_TOKEN)
+        bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=msg)
+
+    # Save today's data
+    save_today_data({
+        "usd_price": usd_price,
+        "myr_price": myr_price,
+        "usd_to_php": usd_to_php
+    })
+
+if __name__ == "__main__":
+    main()
