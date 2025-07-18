@@ -45,7 +45,12 @@ def calculate_php_price(usd_price, exchange_rate):
 
 def load_yesterday_data():
     if os.path.exists(HISTORY_FILE):
+        return None
+        
         with open(HISTORY_FILE, "r") as f:
+            content = f.read().strip()
+            if not content:
+                return None
             return json.load(f)
     return None
 
