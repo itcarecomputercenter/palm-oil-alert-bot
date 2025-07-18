@@ -1,46 +1,51 @@
 import requests
 import json
-import datetime
 import os
+from datetime import datetime
+import time
 
-PALM_URL = "https://tradingeconomics.com/commodity/palm-oil"
-EXCHANGE_URL = "https://api.exchangerate.host/latest?base=USD&symbols=PHP"
+# === Config ===
+TELEGRAM_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"
+TELEGRAM_CHAT_ID = "YOUR_CHAT_ID"  # or channel username with @
+YESTERDAY_FILE = "yesterday_data.json"
 
-def fetch_palm_oil_price():
-    headers = {'User-Agent': 'Mozilla/5.0'}
-    response = requests.get(PALM_URL, headers=headers)
-    if response.status_code == 200:
-        text = response.text
-        try:
-            # Extract the MYR/MT price manually from the page
-            start = text.find('"ticker":"PALM"')
-            snip = text[start:start+500]
-            usd_price_str = snip.split('"last":')[1].split(",")[0]
-            usd_price = float(usd_price_str)
-            return usd_price
-        except Exception:
-            return None
-    return None
+# === Palm Oil Data Source ===
+def get_palm_price_usd():
+    url = "https://markets.businessinsider.com/commodities/palm-oil-price"
+    response = requests.get(url)
+    if response.status_code != 200:
+        raise Exception("Failed to fetch palm oil price page")
 
-def fetch_usd_to_php():
-    response = requests.get(EXCHANGE_URL)
-    if response.status_code == 200:
-        data = response.json()
-        return data["rates"]["PHP"]
-    return None
+    import re
+    from bs4 import BeautifulSoup
+    soup = BeautifulSoup(response.text, "html.parser")
+    match = re.search(r"Palm Oil \((.*?)\)\s+Price\s+\$([\d,.]+)", soup.text)
+    if not match:
+        raise Exception("Palm oil price not found")
+    return float(match.group(2).replace(",", ""))  # USD/ton
 
-def save_today_data(usd_price, usd_to_php):
-    with open("yesterday_data.json", "w") as f:
-        json.dump({
-            "usd_price": usd_price,
-            "usd_to_php": usd_to_php
-        }, f)
+# === Currency Conversion ===
+def get_usd_to_php():
+    url = "https://api.exchangerate.host/latest?base=USD&symbols=PHP"
+    r = requests.get(url)
+    return r.json()["rates"]["PHP"]
 
+# === Telegram Notification ===
+def send_telegram_message(message):
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": message,
+        "parse_mode": "HTML"
+    }
+    requests.post(url, data=payload)
+
+# === File Save/Load ===
 def load_yesterday_data():
-    if not os.path.exists("yesterday_data.json"):
+    if not os.path.exists(YESTERDAY_FILE):
         return None
     try:
-        with open("yesterday_data.json", "r") as f:
+        with open(YESTERDAY_FILE, "r") as f:
             content = f.read().strip()
             if not content:
                 return None
@@ -48,58 +53,63 @@ def load_yesterday_data():
     except json.JSONDecodeError:
         return None
 
-def determine_change_cause(current, previous):
-    if not previous:
-        return "No previous data for comparison."
+def save_today_data(usd_price, usd_to_php):
+    with open(YESTERDAY_FILE, "w") as f:
+        json.dump({
+            "date": datetime.now().strftime("%Y-%m-%d"),
+            "usd_price": usd_price,
+            "usd_to_php": usd_to_php
+        }, f)
+
+# === Change Analyzer ===
+def generate_price_summary(today_price_usd, today_php, yesterday_data):
+    if not yesterday_data:
+        return (
+            f"🌴 <b>Palm Oil Price Update</b> ({datetime.now().strftime('%Y-%m-%d')})\n\n"
+            f"• Price: <b>${today_price_usd:.2f}</b> / ton\n"
+            f"• USD to PHP: <b>{today_php:.2f}</b>\n"
+            f"• Peso Price: <b>₱{today_price_usd * today_php:,.2f}</b> / ton\n\n"
+            "📌 No data for yesterday. First time update."
+        )
+
+    y_usd = yesterday_data["usd_price"]
+    y_php = yesterday_data["usd_to_php"]
+    y_peso = y_usd * y_php
+    t_peso = today_price_usd * today_php
+
+    usd_diff = today_price_usd - y_usd
+    usd_pct = (usd_diff / y_usd) * 100 if y_usd else 0
+
+    php_diff = today_php - y_php
+    php_pct = (php_diff / y_php) * 100 if y_php else 0
+
+    peso_diff = t_peso - y_peso
+    peso_pct = (peso_diff / y_peso) * 100 if y_peso else 0
 
     cause = []
-    if current["usd_price"] > previous["usd_price"]:
-        cause.append("🛢️ Palm oil price increased")
-    elif current["usd_price"] < previous["usd_price"]:
-        cause.append("🛢️ Palm oil price decreased")
+    if abs(usd_pct) > 0.5:
+        cause.append("Palm Oil Price")
+    if abs(php_pct) > 0.5:
+        cause.append("Exchange Rate")
 
-    if current["usd_to_php"] > previous["usd_to_php"]:
-        cause.append("💱 PHP weakened")
-    elif current["usd_to_php"] < previous["usd_to_php"]:
-        cause.append("💱 PHP strengthened")
+    return (
+        f"🌴 <b>Palm Oil Price Update</b> ({datetime.now().strftime('%Y-%m-%d')})\n\n"
+        f"• Price: <b>${today_price_usd:.2f}</b> ({usd_pct:+.2f}%)\n"
+        f"• USD to PHP: <b>{today_php:.2f}</b> ({php_pct:+.2f}%)\n"
+        f"• Peso Price: <b>₱{t_peso:,.2f}</b> ({peso_pct:+.2f}%)\n\n"
+        f"📈 Change likely due to: <b>{', '.join(cause) if cause else 'No major change'}</b>"
+    )
 
-    return " | ".join(cause)
-
-def main():
-    usd_price = fetch_palm_oil_price()
-    usd_to_php = fetch_usd_to_php()
-
-    if usd_price is None or usd_to_php is None:
-        print("❌ Failed to fetch palm oil price or USD to PHP exchange rate.")
-        return
-
-    php_per_kg = (usd_price * usd_to_php) / 1000
-
-    yesterday_data = load_yesterday_data()
-
-    if yesterday_data:
-        old_php_per_kg = yesterday_data["usd_price"] * yesterday_data["usd_to_php"] / 1000
-        percent_change = ((php_per_kg - old_php_per_kg) / old_php_per_kg) * 100
-        change_symbol = "📈" if percent_change > 0 else "📉"
-        percent_str = f"{change_symbol} {percent_change:.2f}% from yesterday"
-        cause = determine_change_cause(
-            {"usd_price": usd_price, "usd_to_php": usd_to_php},
-            yesterday_data
-        )
-    else:
-        percent_str = "ℹ️ No previous data to compare."
-        cause = ""
-
-    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
-    print(f"""🛢️ Palm Oil Price Update ({now}):
-USD price: ${usd_price:.2f}/MT
-PHP per kg: ₱{php_per_kg:,.2f}
-USD to PHP: {usd_to_php:.2f}
-{percent_str}
-{cause}
-""")
-
-    save_today_data(usd_price, usd_to_php)
-
+# === Main ===
 if __name__ == "__main__":
-    main()
+    try:
+        usd_price = get_palm_price_usd()
+        usd_to_php = get_usd_to_php()
+        yesterday_data = load_yesterday_data()
+        summary = generate_price_summary(usd_price, usd_to_php, yesterday_data)
+        print(summary)
+        send_telegram_message(summary)
+        save_today_data(usd_price, usd_to_php)
+    except Exception as e:
+        send_telegram_message(f"⚠️ Palm Oil Bot Error:\n{str(e)}")
+        raise
