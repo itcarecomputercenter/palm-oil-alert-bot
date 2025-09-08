@@ -53,13 +53,13 @@ if __name__ == '__main__':
     if isinstance(usd_final, str):
         # If error message returned
         message = (
-            f"🛢️ Palm Oil Price Update ({now}):\n\n"
+            f"🛢️ Palm Olein Price Update ({now}):\n\n"
             f"{usd_final}\n\n"
             f"⚠️ USD fallback failed. Please check manually."
         )
     else:
         message = (
-            f"🛢️ Palm Oil Price Update ({now}):\n\n"
+            f"🛢️ Palm Olein Price Update ({now}):\n\n"
             f"🌐 USD Price: {usd_price} USD/ton\n"
             f"→ Base: ₱{usd_php_kg}/kg\n"
             f"→ Est. Retail: ₱{usd_final}/kg\n\n"
