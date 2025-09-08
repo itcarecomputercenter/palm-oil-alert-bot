@@ -19,7 +19,7 @@ markup = 5.0
 buffer = 1.0
 
 def get_usd_price():
-    url = "https://ph.investing.com/commodities/rbd-palm-olein"
+    url = "https://markets.businessinsider.com/commodities/palm-oil-price"
     headers = {"User-Agent": "Mozilla/5.0"}
     try:
         res = requests.get(url, headers=headers)
